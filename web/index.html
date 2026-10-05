@@ -273,12 +273,12 @@
     <div class="card">
       <h2>Diagnostics</h2>
       <p class="note"><b id="appVersion"></b> · Frames: <b id="dFrames">0</b> · CRC errors: <b id="dCrc">0</b> · Unknown: <b id="dUnk">0</b></p>
-      <div class="row" style="justify-content: space-between">
-        <span class="note">Connection log</span>
-        <button id="btnCopyLog">Copy log</button>
-      </div>
-      <pre id="evlog"></pre>
       <details>
+        <summary>Connection log</summary>
+        <button id="btnCopyLog" style="margin-top: 8px">Copy log</button>
+        <pre id="evlog"></pre>
+      </details>
+      <details style="margin-top: 8px">
         <summary>Raw notifications</summary>
         <label style="margin-top: 8px"><input id="rawOn" type="checkbox"> Capture</label>
         <pre id="raw"></pre>
