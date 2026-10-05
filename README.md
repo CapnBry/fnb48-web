@@ -46,7 +46,8 @@ You can also skip hosting and install it over USB with Chrome port forwarding:
 Because the service worker cached it, the installed app keeps working after you unplug.
 
 **Updating:** the service worker fetches from the network first and only uses its cache when offline, so a normal
-reload always picks up changes. Bump `VERSION` in `web/sw.js` when you add or rename files so the offline cache is rebuilt.
+reload always picks up changes. Bump `APP_VERSION` in `web/version.js` on each release: it rebuilds the offline cache and is shown first in the
+Diagnostics panel, so you can tell which version is running.
 
 ## Publishing on GitHub Pages
 

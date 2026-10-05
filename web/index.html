@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FNB48 BLE Control</title>
 <link rel="manifest" href="manifest.webmanifest">
+<script src="version.js"></script>
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#171a21">
@@ -271,7 +272,7 @@
 
     <div class="card">
       <h2>Diagnostics</h2>
-      <p class="note">Frames: <b id="dFrames">0</b> · CRC errors: <b id="dCrc">0</b> · Unknown: <b id="dUnk">0</b></p>
+      <p class="note"><b id="appVersion"></b> · Frames: <b id="dFrames">0</b> · CRC errors: <b id="dCrc">0</b> · Unknown: <b id="dUnk">0</b></p>
       <div class="row" style="justify-content: space-between">
         <span class="note">Connection log</span>
         <button id="btnCopyLog">Copy log</button>
@@ -311,6 +312,7 @@ const hms = (s) => {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 };
 
+$('appVersion').textContent = window.APP_VERSION ?? '?';
 const meter = new FNB48();
 const state = {
   info: null, group: null, groupCount: 0, tempC: null, fahrenheit: store.get('fahrenheit', false),

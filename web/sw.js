@@ -1,10 +1,12 @@
 // Offline support: cache the app shell and serve it when the network is unavailable.
-// Bump VERSION when the list of files changes so old caches are dropped.
-const VERSION = 'fnb48-v20';
+// The version lives in version.js; bumping it there rebuilds the cache.
+importScripts('version.js');
+const VERSION = `fnb48-${self.APP_VERSION}`;
 const SHELL = [
   './',
   './index.html',
   './fnb48.js',
+  './version.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
