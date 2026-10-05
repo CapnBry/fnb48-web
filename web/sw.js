@@ -1,6 +1,6 @@
 // Offline support: cache the app shell and serve it when the network is unavailable.
 // Bump VERSION when the list of files changes so old caches are dropped.
-const VERSION = 'fnb48-v19';
+const VERSION = 'fnb48-v20';
 const SHELL = [
   './',
   './index.html',
@@ -26,12 +26,20 @@ self.addEventListener('activate', (e) => {
 
 // Network-first: always run the current code when the server is reachable, fall back to the cache
 // when offline (or the network takes longer than 3 s).
+// cache: 'no-cache' makes every fetch revalidate with the server. Without it, the browser's HTTP cache
+// answers for as long as the server allows (GitHub Pages sends max-age=600), so a launch could run code
+// up to 10 minutes stale, or mix files from two versions. Unchanged files come back as cheap 304s.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     try {
-      const res = await fetch(e.request, { signal: AbortSignal.timeout(3000) });
+      // A navigation Request can't be cloned with options, so build a fresh one from its URL. Keep its
+      // redirect mode: a navigation must not be answered with an already-followed redirect.
+      const req = new Request(e.request.url, {
+        cache: 'no-cache', redirect: e.request.redirect, signal: AbortSignal.timeout(3000),
+      });
+      const res = await fetch(req);
       if (res.ok) cache.put(e.request, res.clone());
       return res;
     } catch {
