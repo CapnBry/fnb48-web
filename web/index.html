@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FNB48 Meter</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#171a21">
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --border: #dfe2e7;
+    --text: #1b1f24;
+    --muted: #667080;
+    --accent: #2563eb;
+    --volt: #b58500;
+    --amp: #0a84d6;
+    --watt: #c2410c;
+    --danger: #dc2626;
+    --ok: #16a34a;
+    --grid: #e8eaee;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --border: #2a2f3a;
+      --text: #e6e9ef;
+      --muted: #8b93a3;
+      --accent: #5b8cff;
+      --volt: #f5c518;
+      --amp: #38b6ff;
+      --watt: #ff8a4c;
+      --danger: #ff5c5c;
+      --ok: #3ddc84;
+      --grid: #232833;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e9ef; --muted: #8b93a3;
+    --accent: #5b8cff; --volt: #f5c518; --amp: #38b6ff; --watt: #ff8a4c; --danger: #ff5c5c;
+    --ok: #3ddc84; --grid: #232833;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .pill.connected { color: var(--ok); border-color: var(--ok); }
+  .pill.connecting, .pill.searching { color: var(--accent); border-color: var(--accent); }
+  #devinfo { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .spacer { flex: 1; }
+  button, select, input {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  input[type=number] { width: 6.5em; font-family: var(--mono); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  .readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .big { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; transition: border-color .2s, box-shadow .2s; min-width: 0; }
+  .big .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .big .value { font: 600 clamp(28px, 6vw, 52px)/1.1 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .big .value small { font-size: .45em; color: var(--muted); margin-left: 4px; }
+  .big.v .value { color: var(--volt); }
+  .big.a .value { color: var(--amp); }
+  .big.w .value { color: var(--watt); }
+  .big.alarm { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger) inset; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 16px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font: 500 16px var(--mono); font-variant-numeric: tabular-nums; }
+  .stat .v.clickable { cursor: pointer; text-decoration: underline dotted var(--muted); }
+
+  .chart-wrap { position: relative; height: 340px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #tooltip {
+    position: absolute; pointer-events: none; display: none; font: 12px var(--mono);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; white-space: nowrap;
+  }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+  .legend b { font-family: var(--mono); font-weight: 500; }
+  .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; }
+  th { font-family: inherit; font-weight: 600; color: var(--muted); font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  tr.current td { color: var(--accent); }
+  .groups { display: flex; flex-wrap: wrap; gap: 4px; }
+  .groups button { min-width: 2.6em; padding: 4px 8px; }
+  .note { font-size: 12px; color: var(--muted); }
+  .warn { font-size: 12px; color: var(--danger); }
+  label { display: inline-flex; align-items: center; gap: 6px; }
+  #raw { font: 11px/1.35 var(--mono); max-height: 260px; overflow: auto; white-space: pre; margin: 8px 0 0; color: var(--muted); }
+  #unsupported { display: none; border-color: var(--danger); }
+  details summary { cursor: pointer; color: var(--muted); }
+
+  @media (max-width: 760px) {
+    main { padding: 12px 16px; }
+    .readouts { grid-template-columns: 1fr; gap: 8px; }
+    .grid2 { grid-template-columns: 1fr; }
+    .chart-wrap { height: 260px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>FNB48 Meter</h1>
+    <span id="status" class="pill">disconnected</span>
+    <span id="devinfo"></span>
+    <span class="spacer"></span>
+    <button id="btnStream" disabled>Pause stream</button>
+    <button id="btnConnect" class="primary">Connect</button>
+  </header>
+
+  <section id="unsupported" class="card">
+    <h2>Web Bluetooth unavailable</h2>
+    <p>This browser does not expose <code>navigator.bluetooth</code>. Use Chrome, Edge or another Chromium browser,
+    and load this page from <code>http://localhost</code> or HTTPS. On Linux you may need to enable
+    <code>chrome://flags/#enable-experimental-web-platform-features</code>.</p>
+  </section>
+
+  <section class="readouts">
+    <div class="big v" id="boxV"><div class="label">Voltage</div><div class="value"><span id="rV">–.––––</span><small>V</small></div></div>
+    <div class="big a" id="boxA"><div class="label">Current</div><div class="value"><span id="rA">–.––––</span><small>A</small></div></div>
+    <div class="big w"><div class="label">Power</div><div class="value"><span id="rW">–.––––</span><small>W</small></div></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="margin-bottom: 12px">
+      <h2 style="margin: 0">Live trace</h2>
+      <span class="spacer"></span>
+      <label>Window
+        <select id="win">
+          <option value="10">10 s</option>
+          <option value="30" selected>30 s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="3600">1 h</option>
+        </select>
+      </label>
+      <button id="tgV" class="on">V</button>
+      <button id="tgA" class="on">A</button>
+      <button id="tgW">W</button>
+      <button id="btnPause">Freeze</button>
+      <button id="btnClear">Clear</button>
+    </div>
+    <div class="chart-wrap"><canvas id="chart"></canvas><div id="tooltip"></div></div>
+    <div class="legend">
+      <span><span class="swatch" style="background: var(--volt)"></span>V min <b id="sVmin">–</b> max <b id="sVmax">–</b> avg <b id="sVavg">–</b></span>
+      <span><span class="swatch" style="background: var(--amp)"></span>A min <b id="sAmin">–</b> max <b id="sAmax">–</b> avg <b id="sAavg">–</b></span>
+      <span><span class="swatch" style="background: var(--watt)"></span>W max <b id="sWmax">–</b> avg <b id="sWavg">–</b></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="stats">
+      <div class="stat"><div class="k">Temperature</div><div class="v clickable" id="rT" title="Click to toggle °C/°F">–</div></div>
+      <div class="stat"><div class="k">Equiv. resistance</div><div class="v" id="rR">–</div></div>
+      <div class="stat"><div class="k">D+</div><div class="v" id="rDp">–</div></div>
+      <div class="stat"><div class="k">D−</div><div class="v" id="rDm">–</div></div>
+      <div class="stat"><div class="k">Detected</div><div class="v" id="rProto">–</div></div>
+      <div class="stat"><div class="k">Sample rate</div><div class="v" id="rRate">–</div></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>Energy record (on device)</h2>
+      <div class="stats" style="margin-bottom: 12px">
+        <div class="stat"><div class="k">Group</div><div class="v" id="eGroup">–</div></div>
+        <div class="stat"><div class="k">Energy</div><div class="v" id="eWh">–</div></div>
+        <div class="stat"><div class="k">Charge</div><div class="v" id="eAh">–</div></div>
+        <div class="stat"><div class="k">Record time</div><div class="v" id="eTime">–</div></div>
+        <div class="stat"><div class="k">Meter uptime</div><div class="v" id="eUp">–</div></div>
+      </div>
+      <div class="row">
+        <span class="note">Select group:</span>
+        <div class="groups" id="groupBtns"></div>
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <button id="btnClearGroup" class="danger" disabled>Clear current group…</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Capacity by group</h2>
+      <div class="row" style="margin-bottom: 8px">
+        <button id="btnCapacity" disabled>Read all groups</button>
+        <label>Cell V <input id="cellV" type="number" step="0.05" min="3" max="5" value="3.7"></label>
+        <label>Efficiency % <input id="eff" type="number" step="1" min="50" max="100" value="90"></label>
+      </div>
+      <table>
+        <thead><tr><th>Group</th><th>Wh</th><th>Ah</th><th>≈ mAh @ cell</th></tr></thead>
+        <tbody id="capBody"><tr><td colspan="4" class="note">Not read yet</td></tr></tbody>
+      </table>
+      <p class="note">Estimated battery capacity = Wh ÷ cell voltage × efficiency (how the original app computes it).</p>
+    </div>
+
+    <div class="card">
+      <h2>Fast-charge trigger</h2>
+      <p class="warn">This asks the charger plugged into the meter's input to raise its output voltage. Unplug anything on the
+      output that cannot tolerate it before you trigger.</p>
+      <div class="row">
+        <select id="trigMode"></select>
+        <select id="trigVolt"></select>
+        <button id="btnTrigger" disabled>Trigger…</button>
+        <button id="btnTrigStop" disabled>Stop</button>
+        <button id="btnTrigStatus" disabled>Refresh</button>
+      </div>
+      <p class="note">State: <b id="trigState">–</b> <span id="trigAck"></span></p>
+    </div>
+
+    <div class="card">
+      <h2>Alarms</h2>
+      <div class="row">
+        <label>V below <input id="alVmin" type="number" step="0.1" value="4"></label>
+        <label>V above <input id="alVmax" type="number" step="0.1" value="24"></label>
+        <label>A above <input id="alAmax" type="number" step="0.1" value="5"></label>
+      </div>
+      <div class="row" style="margin-top: 8px">
+        <label><input id="alOn" type="checkbox"> Highlight</label>
+        <label><input id="alBeep" type="checkbox"> Beep</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recording</h2>
+      <div class="row">
+        <select id="recSrc">
+          <option value="sample">Fast samples (1 mV / 1 mA)</option>
+          <option value="power">Precise readings (0.1 mV / 0.1 mA)</option>
+        </select>
+        <button id="btnRec">Start recording</button>
+        <button id="btnCsv" disabled>Export CSV</button>
+      </div>
+      <p class="note"><span id="recCount">0</span> rows recorded<span id="recDur"></span>.</p>
+    </div>
+
+    <div class="card">
+      <h2>Diagnostics</h2>
+      <p class="note">Frames: <b id="dFrames">0</b> · CRC errors: <b id="dCrc">0</b> · Unknown: <b id="dUnk">0</b></p>
+      <details>
+        <summary>Raw notifications</summary>
+        <label style="margin-top: 8px"><input id="rawOn" type="checkbox"> Capture</label>
+        <pre id="raw"></pre>
+      </details>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { FNB48, CMD, TRIGGER_MODES, triggerPayload } from './fnb48.js';
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('fnb48.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('fnb48.' + k, JSON.stringify(v)); } catch { /* ignore */ } },
+};
+const fmt = (x, d = 4) => (x == null || Number.isNaN(x) ? '–' : x.toFixed(d));
+const hms = (s) => {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+};
+
+const meter = new FNB48();
+const state = {
+  info: null, group: null, groupCount: 0, tempC: null, fahrenheit: store.get('fahrenheit', false),
+  frames: 0, unknown: 0, sampleTimes: [], capacity: new Map(),
+};
+
+if (!FNB48.supported) $('unsupported').style.display = 'block';
+
+// ---------- connection ----------
+$('btnConnect').onclick = async () => {
+  if (meter.searching) { meter.cancelSearch(); return; }
+  try {
+    if (meter.connected) { await meter.disconnect(); return; }
+    await meter.connect();
+  } catch (e) {
+    setStatus(meter.connected ? 'connected' : 'disconnected');
+    if (e.name === 'TimeoutError') $('status').textContent = 'meter not found';
+    // The meter has to be picked again but the click is too old to open the chooser; the next click will.
+    else if (e.name === 'NeedsChooserError' || e.name === 'SecurityError') $('btnConnect').textContent = 'Choose meter…';
+    else if (e.name !== 'NotFoundError' && e.name !== 'AbortError') alert(`Connection failed: ${e.message}`);
+  }
+};
+$('btnStream').onclick = async () => {
+  if (meter.streaming) { await meter.stopStreaming(); haltChart(); } else await meter.startStreaming();
+  $('btnStream').textContent = meter.streaming ? 'Pause stream' : 'Resume stream';
+};
+
+function setStatus(s) {
+  const el = $('status');
+  el.textContent = s;
+  el.className = 'pill ' + s;
+  const on = s === 'connected';
+  $('btnConnect').textContent = s === 'searching' ? 'Cancel' : on ? 'Disconnect' : 'Connect';
+  $('btnConnect').classList.toggle('primary', !on);
+  for (const id of ['btnStream', 'btnCapacity', 'btnTrigger', 'btnTrigStop', 'btnTrigStatus', 'btnClearGroup']) $(id).disabled = !on;
+  $('btnStream').textContent = 'Pause stream';
+  for (const b of $('groupBtns').children) b.disabled = !on;
+  if (!on) { $('rRate').textContent = '–'; haltChart(); }
+}
+meter.addEventListener('status', (e) => setStatus(e.detail));
+
+// ---------- message handling ----------
+meter.addEventListener('message', ({ detail: m }) => {
+  state.frames++;
+  switch (m.type) {
+    case 'info': onInfo(m); break;
+    case 'power': onPower(m); break;
+    case 'sample': onSample(m); break;
+    case 'aux':
+      state.tempC = m.temperature;
+      renderTemp();
+      $('rR').textContent = m.resistance == null ? '—' : `${m.resistance.toFixed(2)} Ω`;
+      break;
+    case 'dataLines':
+      $('rDp').textContent = `${m.dPlus.toFixed(3)} V`;
+      $('rDm').textContent = `${m.dMinus.toFixed(3)} V`;
+      $('rProto').textContent = m.protocol1 === m.protocol2 ? m.protocol1 : `${m.protocol1} · ${m.protocol2}`;
+      break;
+    case 'energy': onEnergy(m); break;
+    case 'capacity': state.capacity.set(m.group, m); renderCapacity(); break;
+    case 'triggerState': $('trigState').textContent = m.state ? `Active (${m.name})` : 'Idle'; break;
+    case 'ack':
+    case 'nak':
+      $('trigAck').textContent = `(${m.type.toUpperCase()} for 0x${m.for.toString(16)})`;
+      if (m.for === CMD.TRIGGER || m.for === CMD.TRIGGER_STOP) meter.send(CMD.TRIGGER_STATUS);
+      break;
+    default: state.unknown++;
+  }
+});
+setInterval(() => {
+  $('dFrames').textContent = state.frames;
+  $('dCrc').textContent = meter.parser.crcErrors;
+  $('dUnk').textContent = state.unknown;
+  const now = performance.now();
+  state.sampleTimes = state.sampleTimes.filter((t) => now - t < 5000);
+  if (meter.connected) $('rRate').textContent = `${(state.sampleTimes.length / 5).toFixed(1)} /s`;
+}, 1000);
+
+function onInfo(m) {
+  state.info = m;
+  // The "run" counter's meaning is unconfirmed, and the meter has been seen reporting garbage such as 0x7FFFF7DD.
+  const run = m.runCount < 1e7 ? m.runCount : `? (0x${m.runCount.toString(16).toUpperCase()})`;
+  $('devinfo').textContent = `${m.model} · SN ${m.serial} · FW ${m.firmware} · Run ${run}`;
+  document.title = `${m.model} Meter`;
+  state.groupCount = m.groupCount;
+  const box = $('groupBtns');
+  box.replaceChildren();
+  for (let g = 1; g <= m.groupCount; g++) {
+    const b = document.createElement('button');
+    b.textContent = g;
+    b.onclick = () => meter.send(CMD.SELECT_GROUP, [g]);
+    box.append(b);
+  }
+  setGroup(m.group);
+}
+
+function setGroup(g) {
+  state.group = g;
+  [...$('groupBtns').children].forEach((b, i) => b.classList.toggle('on', i + 1 === g));
+  renderCapacity();
+}
+
+function renderTemp() {
+  if (state.tempC == null) return;
+  const t = state.fahrenheit ? state.tempC * 9 / 5 + 32 : state.tempC;
+  $('rT').textContent = `${t.toFixed(1)} °${state.fahrenheit ? 'F' : 'C'}`;
+}
+$('rT').onclick = () => { state.fahrenheit = !state.fahrenheit; store.set('fahrenheit', state.fahrenheit); renderTemp(); };
+
+function onEnergy(m) {
+  if (m.group !== state.group) setGroup(m.group);
+  $('eGroup').textContent = `${m.group} / ${state.groupCount || '?'}`;
+  $('eWh').textContent = `${m.wh.toFixed(5)} Wh`;
+  $('eAh').textContent = `${m.ah.toFixed(5)} Ah`;
+  $('eTime').textContent = hms(m.recordSeconds);
+  const d = Math.floor(m.uptimeSeconds / 86400);
+  $('eUp').textContent = (d ? `${d}d ` : '') + hms(m.uptimeSeconds % 86400);
+  state.capacity.set(m.group, { group: m.group, wh: m.wh, ah: m.ah });
+}
+
+$('btnClearGroup').onclick = () => {
+  if (state.group == null) return;
+  if (confirm(`Clear energy record for group ${state.group}?`)) {
+    meter.send(CMD.CLEAR_GROUP, [state.group]);
+    setTimeout(() => meter.send(CMD.CAPACITY), 500);
+  }
+};
+
+// ---------- capacity ----------
+const cellV = $('cellV'), eff = $('eff');
+cellV.value = store.get('cellV', 3.7);
+eff.value = store.get('eff', 90);
+cellV.oninput = eff.oninput = () => { store.set('cellV', +cellV.value); store.set('eff', +eff.value); renderCapacity(); };
+$('btnCapacity').onclick = () => { state.capacity.clear(); renderCapacity(); meter.send(CMD.CAPACITY); };
+
+function renderCapacity() {
+  const body = $('capBody');
+  const rows = [...state.capacity.values()].sort((a, b) => a.group - b.group);
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="note">Not read yet</td></tr>'; return; }
+  const v = +cellV.value || 3.7, e = (+eff.value || 90) / 100;
+  body.replaceChildren(...rows.map((r) => {
+    const tr = document.createElement('tr');
+    if (r.group === state.group) tr.className = 'current';
+    for (const s of [r.group, r.wh.toFixed(5), r.ah.toFixed(5), (r.wh / v * e * 1000).toFixed(0)]) {
+      const td = document.createElement('td'); td.textContent = s; tr.append(td);
+    }
+    return tr;
+  }));
+}
+
+// ---------- trigger ----------
+const trigMode = $('trigMode'), trigVolt = $('trigVolt');
+for (const m of TRIGGER_MODES) trigMode.add(new Option(m.name, m.id));
+function fillVolts() {
+  const mode = TRIGGER_MODES[+trigMode.value];
+  trigVolt.replaceChildren(...mode.volts.map((v) => new Option(`${v.toFixed(1)} V`, v)));
+  trigVolt.value = mode.volts.includes(9) ? 9 : mode.volts[0];
+}
+trigMode.onchange = fillVolts;
+fillVolts();
+$('btnTrigger').onclick = () => {
+  const mode = TRIGGER_MODES[+trigMode.value], v = +trigVolt.value;
+  if (!confirm(`Request ${v.toFixed(1)} V via ${mode.name}? Make sure the output load can handle it.`)) return;
+  $('trigAck').textContent = '';
+  meter.send(CMD.TRIGGER, triggerPayload(mode.id, v));
+};
+$('btnTrigStop').onclick = () => { $('trigAck').textContent = ''; meter.send(CMD.TRIGGER_STOP); };
+$('btnTrigStatus').onclick = () => meter.send(CMD.TRIGGER_STATUS);
+
+// ---------- alarms ----------
+const alarmInputs = ['alVmin', 'alVmax', 'alAmax', 'alOn', 'alBeep'];
+for (const id of alarmInputs) {
+  const el = $(id), key = 'alarm.' + id;
+  const saved = store.get(key, null);
+  if (saved !== null) el.type === 'checkbox' ? (el.checked = saved) : (el.value = saved);
+  el.onchange = () => store.set(key, el.type === 'checkbox' ? el.checked : +el.value);
+}
+let audio = null, lastBeep = 0;
+function beep() {
+  const now = performance.now();
+  if (now - lastBeep < 1000) return;
+  lastBeep = now;
+  audio ??= new AudioContext();
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.frequency.value = 2400;
+  g.gain.setValueAtTime(0.15, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.15);
+  o.connect(g).connect(audio.destination);
+  o.start();
+  o.stop(audio.currentTime + 0.16);
+}
+function checkAlarms(v, a) {
+  const on = $('alOn').checked || $('alBeep').checked;
+  const vBad = on && (v < +$('alVmin').value || v > +$('alVmax').value);
+  const aBad = on && Math.abs(a) > +$('alAmax').value;
+  $('boxV').classList.toggle('alarm', vBad && $('alOn').checked);
+  $('boxA').classList.toggle('alarm', aBad && $('alOn').checked);
+  if ((vBad || aBad) && $('alBeep').checked) beep();
+}
+
+// ---------- recording ----------
+const rec = { on: false, rows: [], start: 0 };
+$('btnRec').onclick = () => {
+  rec.on = !rec.on;
+  if (rec.on) { rec.rows = []; rec.start = Date.now(); $('recSrc').disabled = true; }
+  else $('recSrc').disabled = false;
+  $('btnRec').textContent = rec.on ? 'Stop recording' : 'Start recording';
+  $('btnRec').classList.toggle('on', rec.on);
+  $('btnCsv').disabled = rec.on || !rec.rows.length;
+  renderRec();
+};
+function record(src, v, a, w) {
+  if (!rec.on || $('recSrc').value !== src) return;
+  rec.rows.push([Date.now(), v, a, w]);
+}
+function renderRec() {
+  $('recCount').textContent = rec.rows.length;
+  $('recDur').textContent = rec.rows.length ? ` over ${hms(Math.round((rec.rows.at(-1)[0] - rec.start) / 1000))}` : '';
+}
+setInterval(() => rec.on && renderRec(), 1000);
+$('btnCsv').onclick = () => {
+  const d = $('recSrc').value === 'sample' ? 3 : 4;
+  const lines = ['timestamp,elapsed_s,voltage_V,current_A,power_W'];
+  for (const [t, v, a, w] of rec.rows) {
+    lines.push(`${new Date(t).toISOString()},${((t - rec.start) / 1000).toFixed(3)},${v.toFixed(d)},${a.toFixed(d)},${w.toFixed(d + 1)}`);
+  }
+  const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `fnb48-${new Date(rec.start).toISOString().replace(/[:.]/g, '-')}.csv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+
+// ---------- readings ----------
+function onPower(m) {
+  $('rV').textContent = fmt(m.voltage);
+  $('rA').textContent = fmt(m.current);
+  $('rW').textContent = fmt(m.power);
+  checkAlarms(m.voltage, m.current);
+  record('power', m.voltage, m.current, m.power);
+}
+
+// Chart data: parallel arrays trimmed to the largest window.
+const MAX_AGE = 3600 * 1000;
+const series = { t: [], v: [], a: [] };
+const GAP_MS = 2000; // samples further apart than this are not joined by a line
+// While the stream is paused or the meter is disconnected the chart's right edge is pinned here.
+let haltedAt = Date.now();
+function haltChart() { haltedAt ??= Date.now(); dirty = true; }
+function onSample(m) {
+  const t = Date.now();
+  if (meter.streaming) haltedAt = null;
+  state.sampleTimes.push(performance.now());
+  series.t.push(t); series.v.push(m.voltage); series.a.push(m.current);
+  if (t - series.t[0] > MAX_AGE + 5000) {
+    const cut = series.t.findIndex((x) => t - x <= MAX_AGE);
+    for (const k in series) series[k].splice(0, cut);
+  }
+  record('sample', m.voltage, m.current, m.voltage * m.current);
+  dirty = true;
+}
+
+// ---------- chart ----------
+const canvas = $('chart'), ctx = canvas.getContext('2d'), tooltip = $('tooltip');
+const show = { v: store.get('show.v', true), a: store.get('show.a', true), w: store.get('show.w', false) };
+let dirty = true, frozenAt = null, hoverX = null;
+const winSel = $('win');
+winSel.value = store.get('window', 30);
+winSel.onchange = () => { store.set('window', +winSel.value); dirty = true; };
+for (const k of ['v', 'a', 'w']) {
+  const b = $('tg' + k.toUpperCase());
+  b.classList.toggle('on', show[k]);
+  b.onclick = () => { show[k] = !show[k]; store.set('show.' + k, show[k]); b.classList.toggle('on', show[k]); dirty = true; };
+}
+$('btnPause').onclick = () => {
+  frozenAt = frozenAt ? null : haltedAt ?? Date.now();
+  $('btnPause').textContent = frozenAt ? 'Unfreeze' : 'Freeze';
+  $('btnPause').classList.toggle('on', !!frozenAt);
+  dirty = true;
+};
+$('btnClear').onclick = () => { for (const k in series) series[k].length = 0; dirty = true; };
+canvas.onmousemove = (e) => { hoverX = e.offsetX; dirty = true; };
+canvas.onmouseleave = () => { hoverX = null; tooltip.style.display = 'none'; dirty = true; };
+new ResizeObserver(() => { dirty = true; }).observe(canvas);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { dirty = true; });
+
+function niceTicks(lo, hi, count = 5) {
+  const span = hi - lo, raw = span / count, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((s) => s * mag).find((s) => span / s <= count) ?? 10 * mag;
+  const ticks = [];
+  for (let x = Math.ceil(lo / step) * step; x <= hi + step * 1e-9; x += step) ticks.push(+x.toFixed(10));
+  return { ticks, step };
+}
+function range(arr, minSpan) {
+  let lo = Infinity, hi = -Infinity;
+  for (const x of arr) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  if (!Number.isFinite(lo)) return [0, minSpan];
+  const pad = Math.max((hi - lo) * 0.1, minSpan / 2);
+  return [lo - pad, hi + pad];
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!dirty) return;
+  dirty = false;
+  const css = getComputedStyle(document.documentElement);
+  const col = (n) => css.getPropertyValue(n).trim();
+  const dpr = devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const winMs = +winSel.value * 1000;
+  const stopAt = frozenAt ?? haltedAt;
+  const tEnd = stopAt ?? Date.now(), tStart = tEnd - winMs;
+  let i0 = series.t.findIndex((t) => t >= tStart);
+  if (i0 < 0) i0 = series.t.length;
+  let i1 = series.t.length;
+  if (stopAt) { const j = series.t.findIndex((t) => t > stopAt); if (j >= 0) i1 = j; }
+  const T = series.t.slice(i0, i1), V = series.v.slice(i0, i1), A = series.a.slice(i0, i1);
+  const P = V.map((v, i) => v * A[i]);
+
+  updateStats(V, A, P);
+
+  const L = 56, R = 56, Tp = 10, B = 24, pw = W - L - R, ph = H - Tp - B;
+  const x = (t) => L + ((t - tStart) / winMs) * pw;
+  ctx.font = `11px ${col('--mono')}`;
+  ctx.lineWidth = 1;
+
+  // time grid
+  const endLabel = frozenAt ? 'frozen' : haltedAt ? (meter.connected ? 'paused' : 'stopped') : 'now';
+  const { ticks: tt } = niceTicks(0, winMs / 1000, Math.max(2, Math.floor(pw / 90)));
+  ctx.strokeStyle = col('--grid'); ctx.fillStyle = col('--muted'); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (const s of tt) {
+    const px = L + pw - (s / (winMs / 1000)) * pw;
+    ctx.beginPath(); ctx.moveTo(px, Tp); ctx.lineTo(px, Tp + ph); ctx.stroke();
+    ctx.fillText(s === 0 ? endLabel : `-${s >= 60 && s % 60 === 0 ? s / 60 + 'm' : s + 's'}`, px, Tp + ph + 6);
+  }
+
+  // left axis: V (or W if V hidden); right axis: A (or W if A hidden)
+  const axes = [];
+  const leftKey = show.v ? 'v' : show.w ? 'w' : null;
+  const rightKey = show.a ? 'a' : show.w && leftKey !== 'w' ? 'w' : null;
+  const data = { v: V, a: A, w: P }, minSpan = { v: 0.05, a: 0.01, w: 0.05 }, color = { v: col('--volt'), a: col('--amp'), w: col('--watt') };
+  const scale = {};
+  for (const k of ['v', 'a', 'w']) {
+    if (!show[k]) continue;
+    const [lo, hi] = range(data[k], minSpan[k]);
+    scale[k] = { lo, hi, y: (val) => Tp + ph - ((val - lo) / (hi - lo)) * ph };
+  }
+  for (const [k, side] of [[leftKey, 'left'], [rightKey, 'right']]) {
+    if (!k) continue;
+    const s = scale[k], { ticks, step } = niceTicks(s.lo, s.hi, Math.max(2, Math.floor(ph / 50)));
+    const dec = Math.max(0, -Math.floor(Math.log10(step)) + (step / 10 ** Math.floor(Math.log10(step)) === 2.5 ? 1 : 0));
+    ctx.fillStyle = color[k]; ctx.textBaseline = 'middle';
+    ctx.textAlign = side === 'left' ? 'right' : 'left';
+    for (const tv of ticks) {
+      const py = s.y(tv);
+      if (side === 'left') { ctx.strokeStyle = col('--grid'); ctx.beginPath(); ctx.moveTo(L, py); ctx.lineTo(L + pw, py); ctx.stroke(); }
+      ctx.fillText(tv.toFixed(dec), side === 'left' ? L - 6 : L + pw + 6, py);
+    }
+    axes.push(k);
+  }
+  ctx.strokeStyle = col('--border'); ctx.strokeRect(L + 0.5, Tp + 0.5, pw, ph);
+
+  // traces
+  ctx.save();
+  ctx.beginPath(); ctx.rect(L, Tp, pw, ph); ctx.clip();
+  ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+  for (const k of ['w', 'a', 'v']) {
+    if (!show[k] || !T.length) continue;
+    const s = scale[k], d = data[k];
+    ctx.strokeStyle = color[k];
+    ctx.beginPath();
+    // Decimate to ~2 points per pixel column (min/max) so long windows stay fast.
+    const per = Math.max(1, Math.floor(T.length / (pw * 2)));
+    // A chunk never spans a gap, and the pen lifts across gaps (e.g. a paused stream).
+    let prevT = null;
+    for (let i = 0; i < T.length;) {
+      let lo = d[i], hi = d[i], j = i + 1;
+      for (; j < Math.min(i + per, T.length) && T[j] - T[j - 1] <= GAP_MS; j++) { if (d[j] < lo) lo = d[j]; if (d[j] > hi) hi = d[j]; }
+      const px = x(T[i]);
+      if (prevT === null || T[i] - prevT > GAP_MS) ctx.moveTo(px, s.y(d[i]));
+      if (per > 1) { ctx.lineTo(px, s.y(lo)); ctx.lineTo(px, s.y(hi)); } else ctx.lineTo(px, s.y(d[i]));
+      prevT = T[j - 1];
+      i = j;
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // hover crosshair
+  if (hoverX != null && hoverX >= L && hoverX <= L + pw && T.length) {
+    const tAt = tStart + ((hoverX - L) / pw) * winMs;
+    let best = 0;
+    for (let i = 1; i < T.length; i++) if (Math.abs(T[i] - tAt) < Math.abs(T[best] - tAt)) best = i; else if (T[i] > tAt) break;
+    const px = x(T[best]);
+    ctx.strokeStyle = col('--muted'); ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(px, Tp); ctx.lineTo(px, Tp + ph); ctx.stroke(); ctx.setLineDash([]);
+    tooltip.style.display = 'block';
+    tooltip.innerHTML = `${new Date(T[best]).toLocaleTimeString()}<br>` +
+      `<span style="color:var(--volt)">${V[best].toFixed(3)} V</span> ` +
+      `<span style="color:var(--amp)">${A[best].toFixed(3)} A</span> ` +
+      `<span style="color:var(--watt)">${P[best].toFixed(3)} W</span>`;
+    const tw = tooltip.offsetWidth;
+    tooltip.style.left = `${Math.min(px + 10, W - tw - 4)}px`;
+    tooltip.style.top = `${Tp + 4}px`;
+  }
+}
+requestAnimationFrame(draw);
+setInterval(() => { dirty = true; }, 250); // keep the time axis scrolling when data is sparse
+
+function updateStats(V, A, P) {
+  const st = (arr) => {
+    if (!arr.length) return null;
+    let lo = Infinity, hi = -Infinity, sum = 0;
+    for (const x of arr) { if (x < lo) lo = x; if (x > hi) hi = x; sum += x; }
+    return { lo, hi, avg: sum / arr.length };
+  };
+  const v = st(V), a = st(A), p = st(P);
+  $('sVmin').textContent = fmt(v?.lo, 3); $('sVmax').textContent = fmt(v?.hi, 3); $('sVavg').textContent = fmt(v?.avg, 3);
+  $('sAmin').textContent = fmt(a?.lo, 3); $('sAmax').textContent = fmt(a?.hi, 3); $('sAavg').textContent = fmt(a?.avg, 3);
+  $('sWmax').textContent = fmt(p?.hi, 3); $('sWavg').textContent = fmt(p?.avg, 3);
+}
+
+// ---------- raw log ----------
+const raw = $('raw'), rawLines = [];
+meter.addEventListener('raw', ({ detail }) => {
+  if (!$('rawOn').checked) return;
+  rawLines.push(`${new Date().toISOString().slice(11, 23)}  ${[...detail].map((b) => b.toString(16).padStart(2, '0')).join(' ')}`);
+  if (rawLines.length > 300) rawLines.splice(0, rawLines.length - 300);
+  raw.textContent = rawLines.join('\n');
+  raw.scrollTop = raw.scrollHeight;
+});
+
+addEventListener('beforeunload', () => { if (meter.connected) meter.disconnect(); });
+if ('serviceWorker' in navigator) {
+  // When an updated service worker takes over a page that was served by the old one, reload once so the
+  // new code runs, unless that would interrupt a live connection.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !meter.connected && !meter.searching) location.reload();
+  });
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+setStatus('disconnected');
+</script>
+</body>
+</html>
