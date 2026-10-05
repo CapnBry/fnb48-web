@@ -1,5 +1,5 @@
 // Offline support: cache the app shell and serve it when the network is unavailable.
-// The version lives in version.js; bumping it there rebuilds the cache.
+// The version lives in version.js and names the cache.
 importScripts('version.js');
 const VERSION = `fnb48-${self.APP_VERSION}`;
 const SHELL = [
@@ -11,6 +11,7 @@ const SHELL = [
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
 ];
 
