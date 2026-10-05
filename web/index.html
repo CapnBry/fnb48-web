@@ -108,7 +108,7 @@
   .note { font-size: 12px; color: var(--muted); }
   .warn { font-size: 12px; color: var(--danger); }
   label { display: inline-flex; align-items: center; gap: 6px; }
-  #raw { font: 11px/1.35 var(--mono); max-height: 260px; overflow: auto; white-space: pre; margin: 8px 0 0; color: var(--muted); }
+  #raw, #evlog { font: 11px/1.35 var(--mono); max-height: 260px; overflow: auto; white-space: pre; margin: 8px 0 0; color: var(--muted); }
   #unsupported { display: none; border-color: var(--danger); }
   details summary { cursor: pointer; color: var(--muted); }
 
@@ -259,6 +259,11 @@
     <div class="card">
       <h2>Diagnostics</h2>
       <p class="note">Frames: <b id="dFrames">0</b> · CRC errors: <b id="dCrc">0</b> · Unknown: <b id="dUnk">0</b></p>
+      <div class="row" style="justify-content: space-between">
+        <span class="note">Connection log</span>
+        <button id="btnCopyLog">Copy log</button>
+      </div>
+      <pre id="evlog"></pre>
       <details>
         <summary>Raw notifications</summary>
         <label style="margin-top: 8px"><input id="rawOn" type="checkbox"> Capture</label>
@@ -711,6 +716,21 @@ function updateStats(V, A, P) {
   $('sWmax').textContent = fmt(p?.hi, 3); $('sWavg').textContent = fmt(p?.avg, 3);
 }
 
+// ---------- connection log ----------
+const evlog = $('evlog'), evLines = [];
+meter.addEventListener('log', ({ detail }) => {
+  evLines.push(`${new Date().toISOString().slice(11, 23)}  ${detail}`);
+  if (evLines.length > 200) evLines.splice(0, evLines.length - 200);
+  evlog.textContent = evLines.join('\n');
+  evlog.scrollTop = evlog.scrollHeight;
+});
+$('btnCopyLog').onclick = async () => {
+  const text = `${navigator.userAgent}\n${evLines.join('\n')}`;
+  try { await navigator.clipboard.writeText(text); $('btnCopyLog').textContent = 'Copied'; }
+  catch { prompt('Copy the log:', text); }
+  setTimeout(() => { $('btnCopyLog').textContent = 'Copy log'; }, 1500);
+};
+
 // ---------- raw log ----------
 const raw = $('raw'), rawLines = [];
 meter.addEventListener('raw', ({ detail }) => {
@@ -732,6 +752,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 setStatus('disconnected');
+window.fnb48 = meter; // for poking at the connection from DevTools / remote debugging
 </script>
 </body>
 </html>

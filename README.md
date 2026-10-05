@@ -15,6 +15,8 @@ Then open <http://localhost:8000> in Chrome or Edge and click **Connect**.
   and restart the browser. BlueZ must be running.
 * **Android:** Chrome supports Web Bluetooth natively, but the page has to come from HTTPS (for example GitHub Pages or any
   static host), because `localhost` on the phone isn't this PC.
+  The first connection takes about 2 seconds longer than on desktop, because the page works around a bug in the meter's
+  Bluetooth module that otherwise leaves Android with no services (see [PROTOCOL.md](PROTOCOL.md#android-service-discovery-bug)).
 * Firefox and Safari don't support Web Bluetooth.
 
 **Reconnecting on Linux:** BlueZ forgets an unpaired device about 30 s after it last heard it advertise, and Chrome then

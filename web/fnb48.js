@@ -145,7 +145,10 @@ export function decode({ cmd, payload: p }) {
   return { type: 'unknown', cmd };
 }
 
-// Web Bluetooth connection. Emits 'message' (decoded), 'raw' (Uint8Array), 'status' (string).
+// Web Bluetooth connection. Emits 'message' (decoded), 'raw' (Uint8Array), 'status' (string),
+// 'log' (string describing a connection step or error, for diagnostics).
+const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+
 export class FNB48 extends EventTarget {
   constructor() {
     super();
@@ -174,12 +177,17 @@ export class FNB48 extends EventTarget {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }
 
+  log(msg) {
+    this.emit('log', msg);
+  }
+
   async request() {
     this.device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'FNB' }, { namePrefix: 'FNIRSI' }, { namePrefix: 'C1' }],
       optionalServices: [SERVICE_NOTIFY, SERVICE_WRITE],
     });
     this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
+    this.log(`chose ${this.device.name ?? 'unnamed device'}`);
     return this.device;
   }
 
@@ -237,8 +245,10 @@ export class FNB48 extends EventTarget {
     try {
       server = await this.device.gatt.connect();
     } catch (e) {
+      this.log(`gatt.connect failed: ${e.name}: ${e.message}`);
       if (e.name !== 'NetworkError') throw e;
       if (this.device.watchAdvertisements) {
+        this.log('scanning for the meter');
         this.emit('status', 'searching');
         server = await this.searchAndConnect(60000);
         this.emit('status', 'connecting');
@@ -253,28 +263,83 @@ export class FNB48 extends EventTarget {
         server = await this.device.gatt.connect();
       }
     }
-    const notifySvc = await server.getPrimaryService(SERVICE_NOTIFY);
-    const writeSvc = await server.getPrimaryService(SERVICE_WRITE);
-    this.notifyChar = await notifySvc.getCharacteristic(CHAR_NOTIFY);
-    this.writeChar = await writeSvc.getCharacteristic(CHAR_WRITE);
-    this.parser = new FrameParser();
-    // Chrome may hand back the same characteristic object after a reconnect, so don't stack listeners.
-    this.notifyChar.removeEventListener('characteristicvaluechanged', this.handleNotify);
-    this.notifyChar.addEventListener('characteristicvaluechanged', this.handleNotify);
-    await this.notifyChar.startNotifications();
+    this.log('GATT connected');
+    try {
+      const [notifySvc, writeSvc] = await this.getServices(server);
+      this.notifyChar = await notifySvc.getCharacteristic(CHAR_NOTIFY);
+      this.writeChar = await writeSvc.getCharacteristic(CHAR_WRITE);
+      const p = this.writeChar.properties;
+      this.log(`characteristics found; write props: ${['write', 'writeWithoutResponse'].filter((k) => p[k]).join(', ')}`);
+      this.notifyCount = 0;
+      this.parser = new FrameParser();
+      // Chrome may hand back the same characteristic object after a reconnect, so don't stack listeners.
+      this.notifyChar.removeEventListener('characteristicvaluechanged', this.handleNotify);
+      this.notifyChar.addEventListener('characteristicvaluechanged', this.handleNotify);
+      await this.notifyChar.startNotifications();
+      this.log('notifications enabled');
+    } catch (e) {
+      // Don't leave a half-set-up link open looking "connected".
+      this.log(`setup failed: ${e.name}: ${e.message}`);
+      this.device.gatt.disconnect();
+      throw e;
+    }
     this.emit('status', 'connected');
     await this.send(CMD.INFO);
     await this.startStreaming();
   }
 
+  // Android discovers services as soon as the link comes up, while the ATT MTU is still 23. The meter's
+  // BLE module answers that discovery with a 68-byte packet, which recent Android versions reject, so
+  // discovery comes back empty and Android keeps serving that empty result for the connection. The MTU
+  // exchange (to 252) completes right after. Reconnecting while Android still holds the radio link
+  // (it lingers ~1 s after a disconnect) re-runs discovery on the same link at MTU 252, which works.
+  // Too short a gap (<~200 ms) and Chrome reuses its stale client; too long and the link is gone.
+  async getServices(server) {
+    const lookup = async (srv) => {
+      try {
+        return [await srv.getPrimaryService(SERVICE_NOTIFY), await srv.getPrimaryService(SERVICE_WRITE)];
+      } catch (e) {
+        if (e.name !== 'NotFoundError') throw e;
+        return null;
+      }
+    };
+    let services = await lookup(server);
+    for (const gap of [500, 800, 350]) {
+      if (services) return services;
+      this.log(`no services found (Android discovery failed); reconnecting on the same link after ${gap} ms`);
+      services = await lookup(await this.reconnectOnSameLink(gap));
+    }
+    if (services) return services;
+    throw new DOMException("Couldn't discover the meter's services", 'ServiceDiscoveryError');
+  }
+
+  async reconnectOnSameLink(gapMs) {
+    // This disconnect is internal, so keep it from reaching onDisconnected / the UI.
+    this.device.removeEventListener('gattserverdisconnected', this.handleDisconnect);
+    try {
+      const gone = new Promise((resolve) => {
+        this.device.addEventListener('gattserverdisconnected', resolve, { once: true });
+        setTimeout(resolve, 1000);
+      });
+      this.device.gatt.disconnect();
+      await gone;
+      await new Promise((resolve) => setTimeout(resolve, gapMs));
+      return await this.device.gatt.connect();
+    } finally {
+      this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
+    }
+  }
+
   onNotify(value) {
     const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     this.lastData = performance.now();
+    if (++this.notifyCount <= 3) this.log(`notification #${this.notifyCount}: ${bytes.length} bytes ${hex(bytes)}`);
     this.emit('raw', bytes.slice());
     for (const frame of this.parser.push(bytes)) this.emit('message', decode(frame));
   }
 
   onDisconnected() {
+    this.log('GATT disconnected');
     clearInterval(this.watchdog);
     this.streaming = false;
     this.emit('status', 'disconnected');
@@ -290,7 +355,16 @@ export class FNB48 extends EventTarget {
   // Web Bluetooth rejects overlapping GATT operations, so writes are serialised.
   send(cmd, payload = []) {
     const frame = buildFrame(cmd, payload);
-    const op = this.writeQueue.then(() => this.writeChar.writeValueWithResponse(frame));
+    const op = this.writeQueue.then(async () => {
+      const t0 = performance.now();
+      try {
+        await this.writeChar.writeValueWithResponse(frame);
+        this.log(`sent ${hex(frame)} (${Math.round(performance.now() - t0)} ms)`);
+      } catch (e) {
+        this.log(`write ${hex(frame)} failed: ${e.name}: ${e.message}`);
+        throw e;
+      }
+    });
     this.writeQueue = op.catch(() => {});
     return op;
   }
@@ -304,6 +378,7 @@ export class FNB48 extends EventTarget {
     this.watchdog = setInterval(() => {
       if (this.streaming && this.connected && performance.now() - this.lastData > 3000) {
         this.lastData = performance.now();
+        this.log(`no data for 3 s (${this.notifyCount} notifications so far), re-sending START`);
         this.send(CMD.START).catch(() => {});
       }
     }, 1000);

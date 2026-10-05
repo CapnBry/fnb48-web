@@ -1,6 +1,6 @@
 // Offline support: cache the app shell and serve it when the network is unavailable.
 // Bump VERSION when the list of files changes so old caches are dropped.
-const VERSION = 'fnb48-v9';
+const VERSION = 'fnb48-v11';
 const SHELL = [
   './',
   './index.html',

@@ -19,6 +19,26 @@ No pairing or bonding is needed. The meter stays silent until it gets a command.
 several frames (45 bytes seen), and a frame may be split across notifications, so the receiver must buffer and
 reassemble them.
 
+### Android service-discovery bug
+
+The BLE module (Device Information: manufacturer `RFstar`, model `RSBRS02ABR`, firmware `Tv5.11u_20200817_EP`)
+breaks the ATT MTU rules. On connect, it sends its own MTU request of 23. It then answers the first service-discovery
+request with a 68-byte packet, although the MTU is still 23. Recent Android versions start discovery as soon as the
+link is up, before the client's MTU exchange (which ends at 252), so they hit this and log:
+
+```
+gatt_client_handle_server_rsp: invalid response pkt size: 68, PDU size: 23
+```
+
+Discovery then returns no services, and Android keeps that empty result for the rest of the connection. This is why
+the original app "connects but shows no data" on newer phones: it looks up service `ffe0`, gets nothing, and stops.
+Linux/BlueZ works because it exchanges the MTU before discovering.
+
+Workaround (in `web/fnb48.js`): if no services are found, disconnect and reconnect after about 500 ms. Android keeps
+the radio link up for about a second after the last client disconnects, so the new connection reuses the link at
+MTU 252 and discovery succeeds. With a gap shorter than about 200 ms Chrome reuses its stale connection, and with a
+gap over about a second the link is gone and the problem repeats.
+
 ## Frame format
 
 ```
