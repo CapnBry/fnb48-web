@@ -140,7 +140,7 @@
     <div class="row">
       <span id="status" class="pill">disconnected</span>
       <span class="spacer"></span>
-      <button id="btnStream" disabled>Pause stream</button>
+      <button id="btnScan">Scan</button>
       <button id="btnConnect" class="primary">Connect</button>
     </div>
   </header>
@@ -322,22 +322,27 @@ const state = {
 if (!FNB48.supported) $('unsupported').style.display = 'block';
 
 // ---------- connection ----------
-$('btnConnect').onclick = async () => {
-  if (meter.searching) { meter.cancelSearch(); return; }
+// Scan opens the browser's chooser to pick (and grant access to) a meter, then connects to it. Connect reuses
+// the meter picked last, which the browser remembers across visits where it supports getDevices().
+async function connect(pick) {
   try {
-    if (meter.connected) { await meter.disconnect(); return; }
+    if (pick) {
+      await meter.request();
+      store.set('deviceId', meter.device.id);
+    }
     await meter.connect();
   } catch (e) {
     setStatus(meter.connected ? 'connected' : 'disconnected');
     if (e.name === 'TimeoutError') $('status').textContent = 'meter not found';
-    // The meter has to be picked again but the click is too old to open the chooser; the next click will.
-    else if (e.name === 'NeedsChooserError' || e.name === 'SecurityError') $('btnConnect').textContent = 'Choose meter…';
+    else if (e.name === 'NeedsChooserError') $('status').textContent = 'scan for meter';
     else if (e.name !== 'NotFoundError' && e.name !== 'AbortError') alert(`Connection failed: ${e.message}`);
   }
-};
-$('btnStream').onclick = async () => {
-  if (meter.streaming) { await meter.stopStreaming(); haltChart(); } else await meter.startStreaming();
-  $('btnStream').textContent = meter.streaming ? 'Pause stream' : 'Resume stream';
+}
+$('btnScan').onclick = () => connect(true);
+$('btnConnect').onclick = async () => {
+  if (meter.searching) meter.cancelSearch();
+  else if (meter.connected) await meter.disconnect();
+  else await connect(false);
 };
 
 function setStatus(s) {
@@ -345,10 +350,11 @@ function setStatus(s) {
   el.textContent = s;
   el.className = 'pill ' + s;
   const on = s === 'connected';
-  $('btnConnect').textContent = s === 'searching' ? 'Cancel' : on ? 'Disconnect' : 'Connect';
+  $('btnConnect').textContent = { searching: 'Cancel', connecting: 'Connecting…', connected: 'Disconnect' }[s] ?? 'Connect';
   $('btnConnect').classList.toggle('primary', !on);
-  for (const id of ['btnStream', 'btnCapacity', 'btnTrigger', 'btnTrigStop', 'btnTrigStatus', 'btnClearGroup']) $(id).disabled = !on;
-  $('btnStream').textContent = 'Pause stream';
+  $('btnConnect').disabled = s === 'connecting' || (s === 'disconnected' && !meter.device);
+  $('btnScan').disabled = s !== 'disconnected';
+  for (const id of ['btnCapacity', 'btnTrigger', 'btnTrigStop', 'btnTrigStatus', 'btnClearGroup']) $(id).disabled = !on;
   for (const b of $('groupBtns').children) b.disabled = !on;
   if (!on) { $('rRate').textContent = '–'; haltChart(); }
 }
@@ -797,6 +803,9 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 setStatus('disconnected');
+meter.restore(store.get('deviceId', null))
+  .catch((e) => meter.log(`getDevices failed: ${e.name}: ${e.message}`))
+  .then(() => { if (!meter.connected && !meter.searching) setStatus('disconnected'); });
 window.fnb48 = meter; // for poking at the connection from DevTools / remote debugging
 </script>
 </body>

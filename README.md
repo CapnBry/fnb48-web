@@ -22,7 +22,9 @@ Live web app (PWA) that can bn installed on your phone: https://capnbry.github.i
 python3 -m http.server 8000 --directory web
 ```
 
-Then open <http://localhost:8000> in Chrome or Edge and click **Connect**.
+Then open <http://localhost:8000> in Chrome or Edge and click **Scan** to pick the meter. After that, **Connect** reconnects
+to the same meter. To have it remembered after the browser restarts, enable
+`chrome://flags/#enable-web-bluetooth-new-permissions-backend`; otherwise you'll need to Scan again each time.
 
 * **Linux desktop:** Web Bluetooth is behind a flag. Enable `chrome://flags/#enable-experimental-web-platform-features`
   and restart the browser. BlueZ must be running.

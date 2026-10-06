@@ -5,6 +5,7 @@ export const SERVICE_NOTIFY = 0xffe0;
 export const CHAR_NOTIFY = 0xffe4;
 export const SERVICE_WRITE = 0xffe5;
 export const CHAR_WRITE = 0xffe9;
+const METER_FILTERS = [{ namePrefix: 'FNB' }, { namePrefix: 'FNIRSI' }, { namePrefix: 'C1' }];
 
 export const CMD = {
   INFO: 0x81,          // -> 0x03 device info
@@ -181,13 +182,31 @@ export class FNB48 extends EventTarget {
     this.emit('log', msg);
   }
 
+  // Opens the browser's device chooser. The chosen meter replaces the current one only if the user picks one.
   async request() {
-    this.device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'FNB' }, { namePrefix: 'FNIRSI' }, { namePrefix: 'C1' }],
+    const device = await navigator.bluetooth.requestDevice({
+      filters: METER_FILTERS,
       optionalServices: [SERVICE_NOTIFY, SERVICE_WRITE],
     });
+    this.forget();
+    this.device = device;
     this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
     this.log(`chose ${this.device.name ?? 'unnamed device'}`);
+    return this.device;
+  }
+
+  // Picks up a meter this site was given access to on an earlier visit, without the chooser. Prefers the
+  // one with id preferredId. Needs getDevices(), which Chrome only offers with persistent permissions.
+  async restore(preferredId) {
+    if (!navigator.bluetooth?.getDevices) return null;
+    const devices = (await navigator.bluetooth.getDevices())
+      .filter((d) => METER_FILTERS.some((f) => d.name?.startsWith(f.namePrefix)));
+    const device = devices.find((d) => d.id === preferredId) ?? devices[0];
+    if (!device) return null;
+    this.forget();
+    this.device = device;
+    this.device.addEventListener('gattserverdisconnected', this.handleDisconnect);
+    this.log(`remembered ${this.device.name ?? 'unnamed device'}`);
     return this.device;
   }
 
@@ -238,8 +257,9 @@ export class FNB48 extends EventTarget {
     }
   }
 
+  // Connects to the current meter (from request() or restore()).
   async connect() {
-    if (!this.device) await this.request();
+    if (!this.device) throw new DOMException('No meter chosen', 'NeedsChooserError');
     this.emit('status', 'connecting');
     let server;
     try {
@@ -247,21 +267,12 @@ export class FNB48 extends EventTarget {
     } catch (e) {
       this.log(`gatt.connect failed: ${e.name}: ${e.message}`);
       if (e.name !== 'NetworkError') throw e;
-      if (this.device.watchAdvertisements) {
-        this.log('scanning for the meter');
-        this.emit('status', 'searching');
-        server = await this.searchAndConnect(60000);
-        this.emit('status', 'connecting');
-      } else {
-        // No way to rescan for this device; re-pick it through the chooser while the click still counts.
-        this.forget();
-        if (navigator.userActivation && !navigator.userActivation.isActive) {
-          throw new DOMException('Device needs to be chosen again', 'NeedsChooserError');
-        }
-        await this.request();
-        this.emit('status', 'connecting');
-        server = await this.device.gatt.connect();
-      }
+      // Without watchAdvertisements() there's no way to rescan for this device; it has to be chosen again.
+      if (!this.device.watchAdvertisements) throw new DOMException('Meter needs to be chosen again', 'NeedsChooserError');
+      this.log('scanning for the meter');
+      this.emit('status', 'searching');
+      server = await this.searchAndConnect(60000);
+      this.emit('status', 'connecting');
     }
     this.log('GATT connected');
     try {
