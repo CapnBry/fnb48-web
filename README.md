@@ -1,9 +1,9 @@
 # FNB48 Web Bluetooth frontend
 
 A browser replacement for the FNIRSI FNB48 Android app since that doesn't seem to work any more. It talks to the meter directly over Web Bluetooth.
-For the reverse-engineered protocol, see [PROTOCOL.md](PROTOCOL.md). All work came from Claude Code disassembling the APK to recreate the specs and implement it.
+For the reverse-engineered protocol, see [PROTOCOL.md](docs/PROTOCOL.md). All work came from Claude Code disassembling the APK to recreate the specs and implement it.
 
-Live web app (PWA) that can bn installed on your phone: https://capnbry.github.io/fnb48-web/
+Live web app (PWA) that can be installed on your phone: https://capnbry.github.io/fnb48-web/
 
 ![Web Frontend Screenshot](screenshots/live.png)
 
@@ -46,3 +46,5 @@ pip install bleak
 ./fnb48.py > log.csv           # 0.1 mV/mA readings at ~4 Hz
 ./fnb48.py --fast > log.csv    # 1 mV/mA samples at ~8-10 Hz
 ```
+
+For scripted/LLM use (JSON output, timed captures, statistics), see [docs/LLM.md](docs/LLM.md).

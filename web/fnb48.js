@@ -1,5 +1,5 @@
 // FNIRSI FNB48 / FNB38 / C1 BLE protocol + Web Bluetooth driver.
-// See PROTOCOL.md for the reverse-engineered frame format.
+// See docs/PROTOCOL.md for the reverse-engineered frame format.
 
 export const SERVICE_NOTIFY = 0xffe0;
 export const CHAR_NOTIFY = 0xffe4;
