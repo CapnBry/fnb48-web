@@ -114,6 +114,19 @@
   #raw, #evlog { font: 11px/1.35 var(--mono); max-height: 260px; overflow: auto; white-space: pre; margin: 8px 0 0; color: var(--muted); }
   #unsupported { display: none; border-color: var(--danger); }
   details summary { cursor: pointer; color: var(--muted); }
+  #cblTitle { font-weight: 600; margin: 0 0 4px; }
+  #cblText { margin: 0 0 12px; }
+  /* Settling gauge: the full bar is 3x the acceptable range, so the white centre third is what's acceptable. */
+  #cblGauge { position: relative; height: 16px; margin: 0 0 12px; border: 1px solid var(--muted); border-radius: 4px; overflow: hidden; background: var(--border); }
+  #cblGauge .ok { position: absolute; top: 0; bottom: 0; left: calc(100% / 3); width: calc(100% / 3); background: #fff; }
+  #cblGauge .centre { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #000; }
+  #cblMarker { position: absolute; top: 0; bottom: 0; width: 6px; margin-left: -3px; background: var(--accent); box-shadow: 0 0 0 1px #000; }
+  #cblMarker.in-range { background: var(--ok); }
+  #cblValue { font: 600 clamp(28px, 6vw, 44px)/1.1 var(--mono); font-variant-numeric: tabular-nums; margin: 0 0 8px; }
+  #cblNotes p { margin: 8px 0; }
+  #cblTableWrap { margin-top: 12px; }
+  #cblTableWrap table { table-layout: fixed; }
+  #cblTableWrap th, #cblTableWrap td { text-align: center; white-space: nowrap; }
 
   @media (max-width: 760px) {
     main { padding: 12px 16px; }
@@ -125,6 +138,7 @@
     .big .label { font-size: 10px; }
     .big .value { font-size: clamp(16px, calc(8.5vw - 10px), 28px); }
     .grid2 { grid-template-columns: 1fr; }
+    #cblTableWrap .wide-only { display: none; }
     /* Full-bleed on phones: every horizontal pixel goes to the plot. */
     .chart-card { margin: 0 -16px; padding: 12px 4px 8px; border-radius: 0; border-left: 0; border-right: 0; }
     .chart-card > .row, .chart-card > .legend { padding: 0 12px; }
@@ -194,6 +208,28 @@
       <div class="stat"><div class="k">D−</div><div class="v" id="rDm">–</div></div>
       <div class="stat"><div class="k">Detected</div><div class="v" id="rProto">–</div></div>
       <div class="stat"><div class="k">Sample rate</div><div class="v" id="rRate">–</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cable resistance</h2>
+    <p id="cblTitle" hidden></p>
+    <p id="cblText"></p>
+    <div id="cblGauge" aria-hidden="true" hidden><div class="ok"></div><div class="centre"></div><div id="cblMarker" hidden></div></div>
+    <div id="cblValue" hidden></div>
+    <div id="cblNotes"></div>
+    <div class="row">
+      <button id="btnCblStart" class="primary" disabled>Start</button>
+      <button id="btnCblCancel" hidden>Cancel</button>
+      <span class="spacer"></span>
+      <span class="note" id="cblLive"></span>
+    </div>
+    <div id="cblTableWrap" hidden>
+      <div class="note">Voltage drop at:</div>
+      <table>
+        <thead><tr><th>1 A</th><th>2 A</th><th>3 A</th><th class="wide-only">4 A</th><th>5 A</th></tr></thead>
+        <tbody id="cblBody"></tbody>
+      </table>
     </div>
   </section>
 
@@ -289,6 +325,7 @@
 
 <script type="module">
 import { FNB48, CMD, TRIGGER_MODES, triggerPayload } from './fnb48.js';
+import { CableTest, CABLE_TUNING } from './cable.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -357,6 +394,7 @@ function setStatus(s) {
   for (const id of ['btnCapacity', 'btnTrigger', 'btnTrigStop', 'btnTrigStatus', 'btnClearGroup']) $(id).disabled = !on;
   for (const b of $('groupBtns').children) b.disabled = !on;
   if (!on) { $('rRate').textContent = '–'; haltChart(); }
+  onCableConnection(on);
 }
 meter.addEventListener('status', (e) => setStatus(e.detail));
 
@@ -565,6 +603,120 @@ function onPower(m) {
   $('rW').textContent = fmtReadout(m.power);
   checkAlarms(m.voltage, m.current);
   record('power', m.voltage, m.current, m.power);
+  cable.push(performance.now() / 1000, m.voltage, m.current);
+  renderCable();
+}
+
+// ---------- cable resistance ----------
+const cable = new CableTest();
+let cableNotice = '';
+
+function fmtOhms(r) {
+  return Math.abs(r) < 1 ? `${(r * 1000).toFixed(1)} mΩ` : `${r.toFixed(3)} Ω`;
+}
+
+// Two significant digits, in milliohms, keeping trailing zeros (1.0, 0.85, 12, 120).
+function fmtMilliohms2(r) {
+  const m = Math.abs(r) * 1000;
+  return m < 100 ? m.toPrecision(2) : String(Number(m.toPrecision(2)));
+}
+
+const CABLE_STATUS = {
+  waiting: () => 'Waiting for the load…',
+  settling: () => 'Load detected, letting the reading settle…',
+  measuring: () => 'Measuring…',
+  stabilizing: (d) => `Waiting to settle: ${d < 0 ? '−' : '+'}${fmtMilliohms2(d)} mΩ, needs to be within ±${fmtMilliohms2(CABLE_TUNING.STABLE_OHM)} mΩ`,
+};
+const CABLE_WARNINGS = {
+  negative: () => 'This is negative, so the load or connection changed since the baseline. Check the load is on the same setting.',
+  nearZero: () => 'There is almost no difference from the baseline. If the load holds a constant current, this method can’t see the cable, so use a plain resistor.',
+  high: () => 'This is very high for a cable. Check the connections and that the load is still on the same setting.',
+  drifting: (w) => `The reading was still drifting at ${fmtOhms(Math.abs(w.perMin))}/min when it was taken. Letting the load warm up should help.`,
+};
+
+function renderCable() {
+  const { step, status, capturing } = cable;
+  const result = step === 'result';
+  const on = meter.connected;
+
+  let title = '', text = '';
+  if (step === 'idle') {
+    text = 'To measure, plug a fixed resistance load (1-2A) into the meter’s output then press Start.';
+  } else if (step === 'baseline') {
+    title = 'Step 1: Baseline';
+    text = CABLE_STATUS[status](cable.deviation);
+  } else if (step === 'cable') {
+    title = 'Step 2: Cable';
+    text = cable.awaitingUnplug
+      ? 'Unplug the load, then connect it to the meter’s output through the cable.'
+      : CABLE_STATUS[status](cable.deviation);
+  }
+  $('cblTitle').hidden = !title;
+  $('cblTitle').textContent = title;
+  $('cblText').hidden = !text;
+  $('cblText').textContent = text;
+  $('cblGauge').hidden = !capturing || cable.awaitingUnplug;
+  const showMarker = capturing && !cable.awaitingUnplug && cable.deviation != null;
+  $('cblMarker').hidden = !showMarker;
+  if (showMarker) {
+    // 0.5 is the centre and the bar spans +/- 3x the limit; off-scale values stay visible at the ends.
+    const pos = 0.5 + cable.deviation / (CABLE_TUNING.STABLE_OHM * 6);
+    $('cblMarker').style.left = `${Math.min(99, Math.max(1, pos * 100))}%`;
+    $('cblMarker').classList.toggle('in-range', Math.abs(cable.deviation) <= CABLE_TUNING.STABLE_OHM);
+  }
+
+  $('cblValue').hidden = !result;
+  if (result) $('cblValue').textContent = fmtOhms(cable.ohms);
+
+  const notes = [];
+  if (cableNotice) notes.push(['warn', cableNotice]);
+  if (result) {
+    const { baseline: base, cable: withCable } = cable;
+    notes.push(['note', `Baseline ${base.r.toFixed(4)} Ω at ${base.a.toFixed(4)} A. With the cable ${withCable.r.toFixed(4)} Ω at ${withCable.a.toFixed(4)} A.`]);
+    for (const w of cable.warnings) notes.push(['warn', CABLE_WARNINGS[w.code](w)]);
+    notes.push(['note', 'To measure another cable, plug the load back into the meter and press Start again.']);
+  }
+  $('cblNotes').replaceChildren(...notes.map(([cls, s]) => {
+    const p = document.createElement('p');
+    p.className = cls;
+    p.textContent = s;
+    return p;
+  }));
+
+  $('btnCblStart').hidden = capturing;
+  $('btnCblStart').disabled = !on;
+  $('btnCblStart').textContent = result ? 'Start again' : 'Start';
+  $('btnCblCancel').hidden = !capturing;
+
+  const live = cable.live;
+  $('cblLive').textContent = capturing && on && live?.r != null ? `Live: ${live.r.toFixed(4)} Ω at ${live.a.toFixed(4)} A` : '';
+
+  $('cblTableWrap').hidden = !result;
+  if (result) {
+    const tr = document.createElement('tr');
+    tr.className = 'current';
+    for (const amps of [1, 2, 3, 4, 5]) {
+      const td = document.createElement('td');
+      if (amps === 4) td.className = 'wide-only';
+      td.textContent = `${(cable.ohms * amps * 1000).toFixed(0)} mV`;
+      tr.append(td);
+    }
+    $('cblBody').replaceChildren(tr);
+  }
+}
+
+function cableAction(fn) {
+  return () => { cableNotice = ''; fn(); renderCable(); };
+}
+$('btnCblStart').onclick = cableAction(() => cable.start());
+$('btnCblCancel').onclick = cableAction(() => cable.reset());
+
+function onCableConnection(on) {
+  if (!on && cable.capturing) {
+    cable.reset();
+    cableNotice = 'The connection to the meter was lost, so that measurement was stopped.';
+  }
+  renderCable();
 }
 
 // Chart data: parallel arrays trimmed to the largest window.
