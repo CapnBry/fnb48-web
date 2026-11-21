@@ -368,6 +368,7 @@ async function connect(pick) {
       store.set('deviceId', meter.device.id);
     }
     await meter.connect();
+    link.wanted = true;
   } catch (e) {
     setStatus(meter.connected ? 'connected' : 'disconnected');
     if (e.name === 'TimeoutError') $('status').textContent = 'meter not found';
@@ -377,26 +378,67 @@ async function connect(pick) {
 }
 $('btnScan').onclick = () => connect(true);
 $('btnConnect').onclick = async () => {
-  if (meter.searching) meter.cancelSearch();
-  else if (meter.connected) await meter.disconnect();
+  if (link.wanted && !meter.connected) stopReconnecting();
+  else if (meter.searching) meter.cancelSearch();
+  else if (meter.connected) { link.wanted = false; await meter.disconnect(); }
   else await connect(false);
 };
 
+// Once connected, a link that drops without the user asking is re-established until it comes back or the user
+// cancels. wanted is whether the user wants to be connected; retrying is set while the reconnect loop runs.
+const link = { wanted: false, retrying: false, wait: null };
+async function reconnect() {
+  if (link.retrying) return;
+  link.retrying = true;
+  try {
+    while (link.wanted && !meter.connected) {
+      try {
+        await meter.connect();
+      } catch (e) {
+        meter.log(`reconnect failed: ${e.name}: ${e.message}`);
+        if (!link.wanted || meter.connected) break;
+        setStatus('disconnected');
+        await new Promise((resolve) => { link.wait = resolve; setTimeout(resolve, 2000); });
+        link.wait = null;
+      }
+    }
+  } finally {
+    link.retrying = false;
+    if (!meter.connected) setStatus('disconnected');
+  }
+}
+function stopReconnecting() {
+  link.wanted = false;
+  meter.cancelSearch();
+  link.wait?.();
+  // Abandons a gatt.connect() that is still pending.
+  if (meter.device?.gatt && !meter.connected) meter.device.gatt.disconnect();
+  setStatus('disconnected');
+}
+
 function setStatus(s) {
   const el = $('status');
-  el.textContent = s;
-  el.className = 'pill ' + s;
+  const reconnecting = link.wanted && s !== 'connected';
+  el.textContent = reconnecting && s === 'disconnected' ? 'reconnecting' : s;
+  el.className = 'pill ' + (reconnecting ? 'connecting' : s);
   const on = s === 'connected';
-  $('btnConnect').textContent = { searching: 'Cancel', connecting: 'Connecting…', connected: 'Disconnect' }[s] ?? 'Connect';
+  $('btnConnect').textContent = reconnecting ? 'Cancel'
+    : { searching: 'Cancel', connecting: 'Connecting…', connected: 'Disconnect' }[s] ?? 'Connect';
   $('btnConnect').classList.toggle('primary', !on);
-  $('btnConnect').disabled = s === 'connecting' || (s === 'disconnected' && !meter.device);
-  $('btnScan').disabled = s !== 'disconnected';
+  $('btnConnect').disabled = !reconnecting && (s === 'connecting' || (s === 'disconnected' && !meter.device));
+  $('btnScan').disabled = reconnecting || s !== 'disconnected';
   for (const id of ['btnCapacity', 'btnTrigger', 'btnTrigStop', 'btnTrigStatus', 'btnClearGroup']) $(id).disabled = !on;
   for (const b of $('groupBtns').children) b.disabled = !on;
   if (!on) { $('rRate').textContent = '–'; haltChart(); }
   onCableConnection(on);
 }
-meter.addEventListener('status', (e) => setStatus(e.detail));
+let lastStatus = 'disconnected';
+meter.addEventListener('status', ({ detail: s }) => {
+  if (s === 'disconnected' && lastStatus === 'connected' && link.wanted) markBreak();
+  lastStatus = s;
+  setStatus(s);
+  if (s === 'disconnected' && link.wanted) reconnect();
+});
 
 // ---------- message handling ----------
 meter.addEventListener('message', ({ detail: m }) => {
@@ -609,7 +651,6 @@ function onPower(m) {
 
 // ---------- cable resistance ----------
 const cable = new CableTest();
-let cableNotice = '';
 
 function fmtOhms(r) {
   return Math.abs(r) < 1 ? `${(r * 1000).toFixed(1)} mΩ` : `${r.toFixed(3)} Ω`;
@@ -648,15 +689,17 @@ function renderCable() {
   } else if (step === 'cable') {
     title = 'Step 2: Cable';
     text = cable.awaitingUnplug
-      ? 'Unplug the load, then connect it to the meter’s output through the cable.'
+      ? 'Unplug the load, then connect it to the meter’s output through the cable.' +
+        (cable.resumed ? ' If you did that while the meter was disconnected, unplug the load and plug it back in.' : '')
       : CABLE_STATUS[status](cable.deviation);
   }
+  if (capturing && !on) text = 'The connection to the meter was lost. The test will carry on with this step once it reconnects.';
   $('cblTitle').hidden = !title;
   $('cblTitle').textContent = title;
   $('cblText').hidden = !text;
   $('cblText').textContent = text;
-  $('cblGauge').hidden = !capturing || cable.awaitingUnplug;
-  const showMarker = capturing && !cable.awaitingUnplug && cable.deviation != null;
+  $('cblGauge').hidden = !capturing || !on || cable.awaitingUnplug;
+  const showMarker = capturing && on && !cable.awaitingUnplug && cable.deviation != null;
   $('cblMarker').hidden = !showMarker;
   if (showMarker) {
     // 0.5 is the centre and the bar spans +/- 3x the limit; off-scale values stay visible at the ends.
@@ -669,7 +712,6 @@ function renderCable() {
   if (result) $('cblValue').textContent = fmtOhms(cable.ohms);
 
   const notes = [];
-  if (cableNotice) notes.push(['warn', cableNotice]);
   if (result) {
     const { baseline: base, cable: withCable } = cable;
     notes.push(['note', `Baseline ${base.r.toFixed(4)} Ω at ${base.a.toFixed(4)} A. With the cable ${withCable.r.toFixed(4)} Ω at ${withCable.a.toFixed(4)} A.`]);
@@ -705,17 +747,12 @@ function renderCable() {
   }
 }
 
-function cableAction(fn) {
-  return () => { cableNotice = ''; fn(); renderCable(); };
-}
-$('btnCblStart').onclick = cableAction(() => cable.start());
-$('btnCblCancel').onclick = cableAction(() => cable.reset());
+$('btnCblStart').onclick = () => { cable.start(); renderCable(); };
+$('btnCblCancel').onclick = () => { cable.reset(); renderCable(); };
 
+// A lost connection pauses the test rather than ending it: the current step is measured afresh after reconnecting.
 function onCableConnection(on) {
-  if (!on && cable.capturing) {
-    cable.reset();
-    cableNotice = 'The connection to the meter was lost, so that measurement was stopped.';
-  }
+  if (!on) cable.interrupt();
   renderCable();
 }
 
@@ -723,6 +760,15 @@ function onCableConnection(on) {
 const MAX_AGE = 3600 * 1000;
 const series = { t: [], v: [], a: [] };
 const GAP_MS = 2000; // samples further apart than this are not joined by a line
+// Times the connection dropped unexpectedly, drawn as red lines. Placed at the last sample, where the trace stops,
+// unless that was long before the drop (the stream had already gone quiet).
+const breaks = [];
+function markBreak() {
+  const now = Date.now(), last = series.t.at(-1);
+  breaks.push(last != null && now - last < 10000 ? last : now);
+  while (breaks.length && now - breaks[0] > MAX_AGE) breaks.shift();
+  dirty = true;
+}
 // While the stream is paused or the meter is disconnected the chart's right edge is pinned here.
 let haltedAt = Date.now();
 function haltChart() { haltedAt ??= Date.now(); dirty = true; }
@@ -757,7 +803,7 @@ $('btnPause').onclick = () => {
   $('btnPause').classList.toggle('on', !!frozenAt);
   dirty = true;
 };
-$('btnClear').onclick = () => { for (const k in series) series[k].length = 0; dirty = true; };
+$('btnClear').onclick = () => { for (const k in series) series[k].length = 0; breaks.length = 0; dirty = true; };
 canvas.onmousemove = (e) => { hoverX = e.offsetX; dirty = true; };
 canvas.onmouseleave = () => { hoverX = null; tooltip.style.display = 'none'; dirty = true; };
 new ResizeObserver(() => { dirty = true; }).observe(canvas);
@@ -883,6 +929,13 @@ function draw() {
     }
     ctx.stroke();
   }
+  // connection drops
+  ctx.strokeStyle = col('--danger'); ctx.lineWidth = 2;
+  for (const tb of breaks) {
+    if (tb < tStart || tb > tEnd) continue;
+    const px = Math.round(x(tb));
+    ctx.beginPath(); ctx.moveTo(px, Tp); ctx.lineTo(px, Tp + ph); ctx.stroke();
+  }
   ctx.restore();
 
   // hover crosshair
@@ -944,13 +997,13 @@ meter.addEventListener('raw', ({ detail }) => {
   raw.scrollTop = raw.scrollHeight;
 });
 
-addEventListener('beforeunload', () => { if (meter.connected) meter.disconnect(); });
+addEventListener('beforeunload', () => { link.wanted = false; if (meter.connected) meter.disconnect(); });
 if ('serviceWorker' in navigator) {
   // When an updated service worker takes over a page that was served by the old one, reload once so the
   // new code runs, unless that would interrupt a live connection.
   const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hadController && !meter.connected && !meter.searching) location.reload();
+    if (hadController && !meter.connected && !meter.searching && !link.wanted && !cable.capturing) location.reload();
   });
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

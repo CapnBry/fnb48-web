@@ -80,6 +80,7 @@ export class CableTest {
     this.status = null;
     this.deviation = null;
     this.live = null;
+    this.resumed = false;
   }
 
   get capturing() { return this.step === 'baseline' || this.step === 'cable'; }
@@ -90,6 +91,18 @@ export class CableTest {
     this.awaitingUnplug = awaitingUnplug;
     this.status = 'waiting';
     this.deviation = null;
+    this.resumed = false;
+  }
+
+  // The readings stopped (e.g. the meter disconnected). Keeps the step and any baseline, but measures the current
+  // step afresh once readings resume. resumed stays set until the step moves on.
+  interrupt() {
+    if (!this.capturing) return;
+    this.capture.restart();
+    this.status = 'waiting';
+    this.deviation = null;
+    this.live = null;
+    this.resumed = true;
   }
 
   start() {
